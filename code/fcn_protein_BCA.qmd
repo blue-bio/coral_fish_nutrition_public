@@ -69,7 +69,8 @@ zoox_pver <- zoox_full |> dplyr::filter(species=="pver") |> droplevels()
 ```{r}
 load("../models/pver.proteinSA.brm6.RData")
 load("../models/aten.proteinSA.brm4.RData")
-
+load("../models/plut.proteinSA.brm4.RData")
+load("../models/pdae.proteinSA.brm4.RData")
 ```
 
 ##Visualisation
@@ -407,7 +408,7 @@ aten.proteinSA.brm4$fit |> stan_ess()
 #good
 
 summary(aten.proteinSA.brm4) 
-#Fish ESS low, run with more iterations
+#OK
 
 ```
 
@@ -438,15 +439,14 @@ aten.proteinSA.brm4 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_cla
 coral.resids <- make_brms_dharma_res(aten.proteinSA.brm4, integerResponse = FALSE)
 
 wrap_elements(~testUniformity(coral.resids)) + 
-  #wrap_elements(~plotResiduals(coral.resids, form = factor(rep(1, nrow(zoox_pver))))) +
   wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
   wrap_elements(~testDispersion(coral.resids))
 
-#NAs due to missing samples, so run without boxplot
 #Looks good
 ```
 
-###Model Investigations #####Summary
+###Model Investigations 
+#####Summary
 
 ```{r}
 #| label: model_investigations_1_aten
@@ -478,38 +478,12 @@ aten.proteinSA.brm4 |>
 #| warning: false
 #| message: false
 #| cache: true
-load("../models/aten.proteinSA.brm4.RData")
 
 aten.protein.means <- aten.proteinSA.brm4 |> 
   emmeans(~treatment, type = 'response') |> 
   as.data.frame()
 
-(aten.protein.means) 
-
 #make plot that displays mean and HDCI
-aten_protein_plot <- ggplot(aten.protein.means, aes(x=factor(treatment, level = level_order_new), y = emmean, colour = treatment)) +  
-  geom_point(data = zoox_aten, aes(x = factor(treatment, level = level_order_new), y = protein_ugSA), colour = "black", alpha = 0.5, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
-  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
-  theme_classic() +
-  theme(legend.position = "none", 
-        text = element_text(size=15),
-        axis.text.y = element_text(colour = "black"), 
-        axis.text.x = element_text(colour = "black")) +
-  scale_x_discrete(expression(Treatment), 
-                   breaks = waiver(), 
-                   labels = level_order_new) + 
-  scale_y_continuous(expression(Protein~(µg~cm^-2))) + 
-  scale_colour_manual(values=group.colors)  
-  # ggplot2::annotate(geom = "text", 
-  #                   label = expression(italic("Acropora kenti")), 
-  #                   size = 5, 
-  #                   x = 0.5, 
-  #                   y = Inf, 
-  #                   hjust = 0, 
-  #                   vjust = 1)
-
-aten_protein_plot 
-
 aten_protein_plot_noraw <- ggplot(aten.protein.means, aes(x=factor(treatment, level = level_order_new), y = emmean, colour = treatment)) +  
   geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
   theme_classic() +
@@ -526,7 +500,6 @@ axis.text.x = element_text(angle = 45,
   scale_y_continuous(expression(Protein~(µg~cm^-2)), 
                      limits = c(190, 400)) + 
   scale_colour_manual(values=group.colors)
-aten_protein_plot_noraw
 ```
 
 #####Pairwise investigations (Murray code)
@@ -547,7 +520,6 @@ aten.proteinSA.brm4 |> emmeans(~treatment) |>
   mutate(.value = (.value)) |> 
   pull(.value) -> x
 x %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))
-
 
 aten.proteinSA.brm4 |> emmeans(~treatment) |> 
   gather_emmeans_draws() |>  
@@ -578,134 +550,12 @@ aten.proteinSA.brm4 |> emmeans(~treatment) |>
             Pl = mean(fit<1),
             Pg = mean(fit>1))  
 #this is the ratio of one treatment to another 
-
-#not quite the same as the results from the emmeans |> pairs, because this is 
 ```
 
-#####Contrast matrix
-
-```{r}
-#| label: model_investigations_3_aten
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-Cmat <- cbind('Dissolved vs Fish' = c(0, 1, 0, -1, 0, 0, 0, 0),
-          'LiveFeeds vs Mix' = c(0, 0, 0, 0, 1, -1, 0, 0), 
-          'Fish in tank vs Dissolved' = c(0, -1, 0, 1/2, 0, 1/2, 0, 0), 
-          'Field vs Any Captive Longterm' = c(1/6, 1/6, -1, 1/6, 1/6, 1/6, 1/6, 0), 
-          'SeaSim vs LiveFeeds' = c(0, 0, 0, 0, 1, 0, 0, -1)) 
-
-#remember for contrast, the one that +ve in the matrix (write as first in the contrast) will be the one used as reference (e.g. live vs Mix (1, -1), is live - mix in the contrast)
-aten.proteinSA.brm4 |> 
-  emmeans(~treatment, type = 'response') |> 
-  contrast(method = list(treatment = Cmat)) |> 
-  gather_emmeans_draws() |>
-  mutate(Fit = (.value)) |> 
-  summarise(median_hdci(Fit), 
-            Pl = mean(Fit < 0), 
-            Pg = mean(Fit > 0)) 
-```
-
-#Plut \## Exploratory data analysis
-
-```{r}
-#| label: data_intro_plut
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true 
-
-ggplot(zoox_plut, aes(y= protein_ugSA, x = treatment, fill = treatment)) + 
-  geom_boxplot() + 
-  facet_grid(~genotype)  
-
-#guassian assumptions 
-#normality, equal variance, independence (we know there a problem, but we will model that in), linearity) 
-#genotype has a strong effect on protein!
-```
-
+#Plut
 ## Fit the model
-
-###Simple model ####Priors model
-
-```{r}
-#| label: simple_model_1_plut
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-
-plut.proteinSA.form1 <- bf(protein_ugSA ~ treatment, family = gaussian())
-
-#get_prior(plut.proteinSA.form1, data = zoox_plut)
-
-zoox_plut |> group_by(treatment) |> summarise(median((protein_ugSA)), mad((protein_ugSA))) 
-
-priors <- prior(normal(514, 160), class = 'Intercept') + 
-  prior(normal(0, 1600), class = 'b') + 
-  prior(student_t(3, 0, 160), 'sigma')
-
-plut.proteinSA.brm1 <- brm(plut.proteinSA.form1, 
-                 data = zoox_plut,
-                 prior = priors, 
-                 sample_prior = 'only',
-                 iter = 5000, 
-                 warmup = 2500, 
-                 chains = 3, cores = 3, 
-                 thin = 5, 
-                 refresh = 0, 
-                 seed = 123, 
-                 backend = "cmdstan") 
-
-plut.proteinSA.brm1 |> conditional_effects() |> plot(points = TRUE)  
-#OK
-```
-
-####With data
-
-```{r}
-#| label: simple_model_2_plut
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-plut.proteinSA.brm2 <- plut.proteinSA.brm1 |> update(sample_prior = "yes",
-                                       refresh = 0,
-                                       seed = 123) 
-
-plut.proteinSA.brm2 |> conditional_effects() |> plot(points = TRUE)  
-#pver.proteinSA.brm2 |> SUYR_prior_and_posterior() 
-#seems good
-```
-
-####DHARMA residuals
-
-```{r}
-#| label: simple_model_3_plut
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-coral.resids <- make_brms_dharma_res(plut.proteinSA.brm2, integerResponse = FALSE)
-
-wrap_elements(~testUniformity(coral.resids)) + 
-  wrap_elements(~plotResiduals(coral.resids, form = factor(rep(1, nrow(zoox_aten))))) +
-  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
-  wrap_elements(~testDispersion(coral.resids))
-#QQ and res vs pred not great - need random effect or different link function
-```
-
-###Treatment + tank random model ####Priors model
+###Treatment + tank model 
+####Priors model
 
 ```{r}
 #| label: tank_rand_model_1_plut
@@ -716,21 +566,12 @@ wrap_elements(~testUniformity(coral.resids)) +
 #| cache: true
 
 plut.proteinSA.form2 <- bf(protein_ugSA ~ treatment + (1|tank_rep_rand), family = Gamma(link = "log")) 
-#plut.proteinSA.form2 <- bf(protein_ugSA ~ treatment + (1|tank_rep_rand), family = gaussian(link = "log")) 
-#plut.proteinSA.form2 <- bf(protein_ugSA ~ treatment + (1|genotype), family = gaussian(link = "log")) 
 
-zoox_plut |> group_by(treatment:genotype) |> summarise(median((log(protein_ugSA))), mad((log(protein_ugSA)))) 
 
 priors <- prior(normal(7, 0.8), class = 'Intercept') + 
   prior(normal(0, 1), class = 'b') +
   prior(student_t(3, 0, 0.6), class = 'sd') + 
-  #prior(student_t(3, 0, 0.4), class = 'sigma') 
   prior(gamma(0.01, 0.01), class = 'shape')
-
-# priors <- prior(normal(7, 0.4), class = 'Intercept') + 
-#  prior(normal(0, 2), class = 'b') + 
-#   prior(student_t(3, 0, 0.4), 'sigma') + 
-#   prior(student_t(3, 0, 0.4), class = 'sd')
 
 plut.proteinSA.brm3 <- brm(plut.proteinSA.form2, 
                  data = zoox_plut,
@@ -747,7 +588,6 @@ plut.proteinSA.brm3 <- brm(plut.proteinSA.form2,
 
 plut.proteinSA.brm3 |> conditional_effects("treatment") |> plot(points = TRUE)   
 #OK 
-
 ```
 
 ####With data
@@ -767,11 +607,6 @@ plut.proteinSA.brm4 <- plut.proteinSA.brm3 |> update(sample_prior = "yes",
 
 plut.proteinSA.brm4 |> conditional_effects("treatment") |> plot(points = TRUE)
 #OK
-
-save(plut.proteinSA.brm4, file = "../models/plut.proteinSA.brm4.RData")
-load("../models/plut.proteinSA.brm4.RData")
-
-#pver.proteinSA.brm6 |> SUYR_prior_and_posterior() |> plot() 
 ```
 
 ####MCMC sampling diagnostics
@@ -785,7 +620,6 @@ load("../models/plut.proteinSA.brm4.RData")
 #| cache: true 
 pars <- plut.proteinSA.brm4 |> get_variables()
 pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^shape.*|^sigma$') |> na.omit() 
-#pars_3 <- str_extract(pars, '^sigma$') |> na.omit() 
 
 #Traceplots
 plut.proteinSA.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
@@ -793,8 +627,6 @@ plut.proteinSA.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
 
 #Autocorrelation
 plut.proteinSA.brm4$fit |> stan_ac(pars = pars_2) 
-#plut.proteinSA.brm4$fit |> stan_ac(pars = pars_3) 
-#sigma high, run with more iterations and higher thinning
 #fixed it, now good 
 
 #Rhat
@@ -822,14 +654,6 @@ summary(plut.proteinSA.brm4)
 
 plut.proteinSA.brm4 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
 #OK
-#Not good! Tried with identity link with 1|geno or 1|tank
-
-#Better with log link and 1|tank, but still missing some bits
-#about the same with geno rand effect 
-
-#model may be slightly over-estimating the protein due to the high outliers
-
-#Better with Gamma with log link! 
 ```
 
 ####DHARMA residuals
@@ -848,16 +672,11 @@ wrap_elements(~testUniformity(coral.resids)) +
   wrap_elements(~plotResiduals(coral.resids, form = factor(rep(1, nrow(zoox_plut))))) +
   wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
   wrap_elements(~testDispersion(coral.resids))
-
-#Residuals not good - refit with log link/try with genotype as random factor
-#better with log link, but still getting a pattern... try fitting with log link and 1|geno
-#still not good, go back to tank rand eff
-#Looks OK with 1|tank and log link
-
 #With Gamma link function and log link looks much better
 ```
 
-###Model Investigations #####Summary
+###Model Investigations 
+#####Summary
 
 ```{r}
 #| label: model_investigations_1_plut
@@ -895,34 +714,7 @@ plut.protein.means <- plut.proteinSA.brm4 |>
   emmeans(~treatment, type = 'response') |> 
   as.data.frame()
 
-(plut.protein.means) 
-
 #make plot that displays mean and HDCI
-plut_protein_plot <- ggplot(plut.protein.means, aes(x=factor(treatment, level = level_order_new), y = response, colour = treatment)) +  
-  geom_point(data = zoox_plut, aes(x = factor(treatment, level = level_order_new), y = protein_ugSA), colour = "black", alpha = 0.5, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
-  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
-  theme_classic() +
-  theme(legend.position = "none", 
-        text = element_text(size=15),
-        axis.text.y = element_text(colour = "black"), 
-        axis.text.x = element_text(colour = "black")) +
-  scale_x_discrete(expression(Treatment), 
-                   breaks = waiver(), 
-                   labels = level_order_new) + 
-  scale_y_continuous(expression(Protein~(µg~cm^-2))) + 
-  scale_colour_manual(values=group.colors)   
-  # ggplot2::annotate(geom = "text", 
-  #                   label = expression(italic("Porites lutea")), 
-  #                   size = 5, 
-  #                   x = 0.5, 
-  #                   y = Inf, 
-  #                   hjust = 0, 
-  #                   vjust = 1)
-
- plut_protein_plot 
-#genotype 1 has high protein - often is outlier... discuss/remove?
-#colour = "black", 
- 
 plut_protein_plot_noraw <- ggplot(plut.protein.means, aes(x=factor(treatment, level = level_order_new), y = response, colour = treatment)) +  
   geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
   theme_classic() +
@@ -939,7 +731,6 @@ axis.text.x = element_text(angle = 45,
   scale_y_continuous(expression(Protein~(µg~cm^-2)), 
                      limits = c(400, 2500)) + 
   scale_colour_manual(values=group.colors)
-plut_protein_plot_noraw
 ```
 
 #####Pairwise investigations (Murray code)
@@ -978,128 +769,10 @@ plut.proteinSA.brm4 |> emmeans(~treatment) |>
 #absolute difference between the treatments
 ```
 
-#####Contrast matrix
-
-```{r}
-#| label: model_investigations_3_plut
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-Cmat <- cbind('Dissolved vs Fish' = c(0, 1, 0, -1, 0, 0, 0, 0),
-          'LiveFeeds vs Mix' = c(0, 0, 0, 0, 1, -1, 0, 0), 
-          'Fish in tank vs Dissolved' = c(0, -1, 0, 1/2, 0, 1/2, 0, 0), 
-          'Field vs Any Captive Longterm' = c(1/6, 1/6, -1, 1/6, 1/6, 1/6, 1/6, 0), 
-          'SeaSim vs LiveFeeds' = c(0, 0, 0, 0, 1, 0, 0, -1)) 
-
-#remember for contrast, the one that +ve in the matrix (write as first in the contrast) will be the one used as reference (e.g. live vs Mix (1, -1), is live - mix in the contrast)
-plut.proteinSA.brm4 |> 
-  emmeans(~treatment, type = 'response') |> 
-  contrast(method = list(treatment = Cmat)) |> 
-  gather_emmeans_draws() |>
-  mutate(Fit = exp(.value)) |> 
-  summarise(median_hdci(Fit), 
-            Pl = mean(Fit < 1), 
-            Pg = mean(Fit > 1)) 
-```
-
-#Pdae \## Exploratory data analysis
-
-```{r}
-#| label: data_intro_pdae
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true 
-
-ggplot(zoox_pdae, aes(y= protein_ugSA, x = treatment, fill = treatment)) + 
-  geom_boxplot() + 
-  facet_grid(~genotype)  
-
-#guassian assumptions 
-#normality, equal variance, independence (we know there a problem, but we will model that in), linearity) 
-#genotype has a strong effect on protein!
-```
-
+#Pdae
 ## Fit the model
-
-###Simple model ####Priors model
-
-```{r}
-#| label: simple_model_1_pdae
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-
-pdae.proteinSA.form1 <- bf(protein_ugSA ~ treatment, family = gaussian())
-
-zoox_pdae |> group_by(treatment) |> summarise(median((protein_ugSA)), mad((protein_ugSA))) 
-
-priors <- prior(normal(504, 89), class = 'Intercept') + 
-  prior(normal(0, 350), class = 'b') + 
-  prior(student_t(3, 0, 89), 'sigma')
-
-pdae.proteinSA.brm1 <- brm(pdae.proteinSA.form1, 
-                 data = zoox_pdae,
-                 prior = priors, 
-                 sample_prior = 'only',
-                 iter = 5000, 
-                 warmup = 2500, 
-                 chains = 3, cores = 3, 
-                 thin = 5, 
-                 refresh = 0, 
-                 seed = 123, 
-                 backend = "cmdstan") 
-
-pdae.proteinSA.brm1 |> conditional_effects() |> plot(points = TRUE)  
-#OK
-```
-
-####With data
-
-```{r}
-#| label: simple_model_2_pdae
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-pdae.proteinSA.brm2 <- pdae.proteinSA.brm1 |> update(sample_prior = "yes",
-                                       refresh = 0,
-                                       seed = 123) 
-
-pdae.proteinSA.brm2 |> conditional_effects() |> plot(points = TRUE)  
-#pver.proteinSA.brm2 |> SUYR_prior_and_posterior() 
-#seems good
-```
-
-####DHARMA residuals
-
-```{r}
-#| label: simple_model_3_pdae
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-coral.resids <- make_brms_dharma_res(pdae.proteinSA.brm2, integerResponse = FALSE)
-
-wrap_elements(~testUniformity(coral.resids)) + 
-  wrap_elements(~plotResiduals(coral.resids, form = factor(rep(1, nrow(zoox_pdae))))) +
-  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
-  wrap_elements(~testDispersion(coral.resids))
-#Looks good
-```
-
-###Treatment + tank random model ####Priors model
+###Treatment + tank model 
+####Priors model
 
 ```{r}
 #| label: tank_rand_model_1_pdae
@@ -1110,8 +783,6 @@ wrap_elements(~testUniformity(coral.resids)) +
 #| cache: true
 
 pdae.proteinSA.form2 <- bf(protein_ugSA ~ treatment + (1|tank_rep_rand), family = gaussian()) 
-
-zoox_pdae |> group_by(treatment:tank_rep_rand) |> summarise(median(protein_ugSA), mad(protein_ugSA)) 
 
 priors <- prior(normal(484, 160), class = 'Intercept') + 
   prior(normal(0, 700), class = 'b') +
@@ -1152,10 +823,6 @@ pdae.proteinSA.brm4 <- pdae.proteinSA.brm3 |> update(sample_prior = "yes",
 
 pdae.proteinSA.brm4 |> conditional_effects("treatment") |> plot(points = TRUE)
 #OK
-save(pdae.proteinSA.brm4, file = "../models/pdae.proteinSA.brm4.RData")
-load("../models/pdae.proteinSA.brm4.RData")
-
-#pver.proteinSA.brm6 |> SUYR_prior_and_posterior() |> plot() 
 ```
 
 ####MCMC sampling diagnostics
@@ -1178,7 +845,6 @@ pdae.proteinSA.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
 #Autocorrelation
 pdae.proteinSA.brm4$fit |> stan_ac(pars = pars_2) 
 pdae.proteinSA.brm4$fit |> stan_ac(pars = pars_3) 
-#sigma high, run with more iterations and higher thinning
 #fixed it, now good 
 
 #Rhat
@@ -1191,7 +857,6 @@ pdae.proteinSA.brm4$fit |> stan_ess()
 
 summary(pdae.proteinSA.brm4) 
 #OK
-
 ```
 
 ####Posterior probablity checks
@@ -1259,41 +924,12 @@ pdae.proteinSA.brm4 |>
 #| warning: false
 #| message: false
 #| cache: true
-load("../models/pdae.proteinSA.brm4.RData")
 
 pdae.protein.means <- pdae.proteinSA.brm4 |> 
   emmeans(~treatment, type = 'response') |> 
   as.data.frame()
 
-(pdae.protein.means) 
-
 #make plot that displays mean and HDCI
-pdae_protein_plot <- ggplot(pdae.protein.means, aes(x=factor(treatment, level = level_order_new), y = emmean, colour = treatment)) +  
-  geom_point(data = zoox_pdae, aes(x = factor(treatment, level = level_order_new), y = protein_ugSA), colour = "black", alpha = 0.5, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
-  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
-  theme_classic() +
-  theme(legend.position = "none", 
-        text = element_text(size=15),
-        axis.text.y = element_text(colour = "black"), 
-        axis.text.x = element_text(colour = "black")) +
-  scale_x_discrete(expression(""), 
-                   breaks = waiver(), 
-                   labels = level_order_new) + 
-  scale_y_continuous(expression(Protein~(µg~cm^-2)), 
-                     limits = c(250, 900), 
-                     breaks = c(300, 400, 500, 600, 700, 800, 900)) + 
-  scale_colour_manual(values=group.colors) 
-  # ggplot2::annotate(geom = "text", 
-  #                   label = expression(italic("Platygyra daedalea")), 
-  #                   size = 5, 
-  #                   x = 0.5, 
-  #                   y = Inf, 
-  #                   hjust = 0, 
-  #                   vjust = 1)
-
- pdae_protein_plot 
-#genotype 1 has high protein - often is outlier... discuss/remove?
-
 pdae_protein_plot_noraw <- ggplot(pdae.protein.means, aes(x=factor(treatment, level = level_order_new), y = emmean, colour = treatment)) +  
   geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
   theme_classic() +
@@ -1310,7 +946,6 @@ axis.text.x = element_text(angle = 45,
   scale_y_continuous(expression(Protein~(µg~cm^-2)), 
                      limits = c(300, 900)) + 
   scale_colour_manual(values=group.colors)
-pdae_protein_plot_noraw
 ```
 
 #####Pairwise investigations (Murray code)
