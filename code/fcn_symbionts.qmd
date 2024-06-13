@@ -4,11 +4,6 @@ format: html
 editor: source
 ---
 
-
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-
 # Preparations
 ```{r Preperations}
 #| label: libraries
@@ -80,6 +75,7 @@ zoox_pver <- zoox_full |> dplyr::filter(species=="pver") |> droplevels()
 level_order_new <- c('Control','Pellets', 'LiveFeeds', 'Mix', 'Fish','Dissolved', 'Field', 'SeaSim')
 level_order_new_nams <- c('Control','Pellets', 'LiveFeeds', 'LiveFeeds + Fish', 'Fish', 'Dissolved',  'Field', 'Post - acclimation') 
 
+group.colors <- c(Control = "#999999", Dissolved = "#E69F00", Fish = "#56B4E9", LiveFeeds = "#009E73", Mix = "#F0E442", Pellets = "#0072B2", Field = "#D55E00", SeaSim = "#CC79A7" )
 ```
 
 #Load models
