@@ -49,7 +49,6 @@ library(easystats)    #framework for stats, modelling and visualisation
 library(dplyr)
 library(scales)
 source('../helperFunctions.R') 
-
 ``` 
 
 #Read in data
