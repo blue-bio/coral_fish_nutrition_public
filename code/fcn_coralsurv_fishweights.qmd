@@ -1,0 +1,315 @@
+---
+title: "fcn_coralsurv_fishweights"
+format: html
+editor: visual
+---
+
+#Packages
+```{r Preperations}
+#| label: libraries
+#| output: false
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: false 
+
+library(tidyverse) #for data wrangling
+library(cmdstanr)   #for cmdstan
+library(brms)       #for fitting models in STAN
+library(standist)   #for visualizing distributions
+library(HDInterval) #for HPD intervals
+library(posterior)  #for posterior draws
+library(coda)       #for diagnostics
+library(bayesplot)  #for diagnostics
+library(ggmcmc)     #for MCMC diagnostics
+library(rstan)      #for interfacing with STAN
+library(effects)   #for partial effects plots
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(tidybayes)
+library(broom.mixed)#for tidying MCMC outputs
+library(patchwork)  #for multiple plots
+library(ggeffects)
+library(DHARMa)
+library(ggridges)
+library(bayestestR) #for ROPE
+library(see)        #for some plots
+library(easystats)     #framework for stats, modelling and visualisation 
+library(dplyr)
+library(survival)
+library(coxme)
+library(survminer)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(xtable)
+source('../helperFunctions.R') 
+```
+
+#Fish weights
+```{r}
+fish <- read_csv('../data/fish_weights.csv', trim_ws = TRUE)
+
+fish <- fish |> mutate(treatment = factor(treatment),
+                       replicate = factor(replicate), 
+                       fish = factor(fish))  
+
+fish_pooled <- fish |> dplyr::group_by(treatment, replicate) |> dplyr::summarise(sum(weight_g)) |> as.data.frame()
+colnames(fish_pooled) <- c('treatment', 'tank', 'mass')
+fish_pooled |> dplyr::summarise(mean(mass), sd(mass))
+```
+
+#Survival
+```{r}
+surv_full <- read_csv('../data/corals_surv.csv', trim_ws = TRUE)
+
+surv_full <- surv_full |> mutate(treatment = factor(treatment),
+                       replicate = factor(replicate),
+                       species = factor(species),
+                       genotype = factor(genotype))   
+
+surv_aten <- surv_full |> dplyr::filter(species=="aten") |> droplevels() 
+surv_pver <- surv_full |> dplyr::filter(species=="pver") |> droplevels() 
+surv_pdae <- surv_full |> dplyr::filter(species=="pdae") |> droplevels() 
+surv_plut <- surv_full |> dplyr::filter(species=="plut") |> droplevels() 
+
+```
+
+##Pocillopora
+```{r}
+surv_pver_o <- surv_pver |> group_by(treatment, replicate) |> 
+  summarise(start = n(), 
+            mort = sum(dead)) |> 
+  mutate(survival = 1 - mort/start) 
+
+surv_pver_o
+```
+
+##Platygyra
+```{r}
+surv_pdae_o <- surv_pdae |> group_by(treatment, replicate) |> 
+  summarise(start = n(), 
+            mort = sum(dead)) |> 
+  mutate(survival = 1 - mort/start) 
+surv_pdae_o
+```
+
+##Porites
+```{r}
+surv_plut_o <- surv_plut |> group_by(treatment, replicate) |> 
+  summarise(start = n(), 
+            mort = sum(dead)) |> 
+  mutate(survival = 1 - mort/start) 
+surv_plut_o
+```
+
+##Acropora
+```{r}
+surv_aten_o <- surv_aten |> group_by(treatment, replicate) |> 
+  summarise(start = n(), 
+            mort = sum(dead)) |> 
+  mutate(survival = 1 - mort/start) 
+
+surv_aten_o |> 
+  group_by(treatment) |> 
+  summarise(mean = mean(survival), 
+            SE = sd(survival)/sqrt(4))
+
+```
+
+```{r}
+hist(surv_aten_o$survival) 
+
+```
+
+```{r}
+aten_surv_form <- bf(survival ~ treatment + (1|replicate), family = Beta(), phi ~ treatment)
+
+get_prior(aten_surv_form, data = surv_aten_o)
+
+surv_aten_o |> group_by(treatment) |> summarise(median(log(survival)), mad(log(survival)))
+
+aten_surv_priors <- prior(normal(-1.26, 0.6), class = 'Intercept') + 
+  prior(normal(0, 2), class = 'b') + 
+  prior(student_t(3, 0, 0.6), class = 'sd') +
+  prior(student_t(3, 0, 0.6), class = 'b', dpar = 'phi') 
+
+#standist::visualize('gamma(1, 2)', 'gamma(0.01, 0.01)', xlim = c(0, 10))
+
+aten_surv_brm1 <- brm(aten_surv_form, 
+                 data = surv_aten_o,
+                 prior = aten_surv_priors, 
+                 sample_prior = 'only',
+                 iter = 5000, 
+                 warmup = 2500, 
+                 chains = 3, cores = 3, 
+                 thin = 5, 
+                 refresh = 0, 
+                 seed = 123, 
+                 backend = "cmdstan") 
+
+aten_surv_brm1 |> conditional_effects('treatment') |> plot(points = TRUE)  
+#OK
+
+aten_surv_brm2 <- aten_surv_brm1 |> update(sample_prior = "yes",
+                                       refresh = 0,
+                                       seed = 123)
+aten_surv_brm2 |> conditional_effects('treatment') |> plot(points = TRUE)  
+
+```
+
+```{r}
+pars <- aten_surv_brm2 |> get_variables()
+pars_2 <- str_extract(pars, '^b_.*|^phi.|^sd_.*$') |> na.omit()
+
+aten_surv_brm2$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+aten_surv_brm2$fit |> stan_ac(pars = pars_2) 
+aten_surv_brm2$fit |> stan_rhat()
+aten_surv_brm2$fit |> stan_ess() 
+summary(aten_surv_brm2) 
+```
+
+```{r}
+aten_surv_brm2 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+
+coral.resids <- make_brms_dharma_res(aten_surv_brm2, integerResponse = FALSE)
+wrap_elements(~testUniformity(coral.resids)) + 
+  wrap_elements(~plotResiduals(coral.resids, form = factor(rep(1, nrow(surv_aten_o))))) +
+  wrap_elements(~plotResiduals(coral.resids, quantreg = TRUE)) +
+  wrap_elements(~testDispersion(coral.resids))
+
+```
+
+```{r}
+aten_surv_brm2 |> 
+  as_draws_df() |> 
+  dplyr::select(matches('^b_.*|^phi$|^sd.*')) |> 
+  summarise_draws(median, 
+                  ~ HDInterval::hdi(.x, .width = 0.95),  
+                  Pl = ~ mean(.x < 1), 
+                  Pg = ~ mean(.x > 1),
+                  "rhat", 
+                  "ess_bulk", 
+                  "ess_tail") |>
+  knitr::kable() 
+```
+
+```{r}
+group.colors.surv <- c(control = "#999999", dissolved = "#E69F00", fish = "#56B4E9", livefeeds = "#009E73", mix = "#F0E442", pellets = "#0072B2")
+
+level_order_new_surv <- c('control','pellets', 'livefeeds', 'dissolved', 'fish',  'mix') 
+level_order_new_surv_lab <- c('Control','Pellets', 'LiveFeeds', 'Dissolved', 'Fish',  'Mix') 
+
+```
+
+```{r}
+aten_surv_means <- aten_surv_brm2 |> 
+  emmeans(~treatment, type = 'response') |> 
+  as.data.frame()
+aten_surv_means
+#make plot that displays mean and HDCI
+aten_surv_means |> ggplot(aes(x=treatment, y = response)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD)) + 
+  theme_classic() +
+  scale_x_discrete(expression(Treatment)) + 
+  scale_y_continuous(expression(Survival)) 
+
+ggplot(data = aten_surv_means, aes(x=factor(treatment, levels = level_order_new_surv), y = response, colour = treatment)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
+  theme_classic() +
+  theme(legend.position = "none", 
+        text = element_text(size=15, colour = "black"),
+        axis.text.y = element_text(colour = "black"), 
+        axis.text.x = element_text(colour = "black")) +
+  scale_x_discrete(labels = level_order_new_surv_lab, 
+                   expression(Treatment), 
+                   breaks = waiver()) + 
+  scale_y_continuous(expression(Survival), limits = c(0, 1))+ 
+    scale_colour_manual(values=group.colors.surv)
+```
+
+###Pairwise comparisons
+```{r}
+
+sTreat <- aten_surv_brm2$data |> pull(treatment) |> levels()
+STreat <- rep(1, length(sTreat))
+names(STreat) <- sTreat
+
+aten_surv_brm2 |> emmeans(~treatment) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = plogis(.value)) |> 
+  ungroup() |>
+  group_by(.draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
+  unnest(fit) |> 
+  group_by(contrast) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<0),
+            Pg = mean(fit>0)) 
+#absolute difference between the treatments
+```
+
+
+```{r}
+
+aten.fit <- survfit(Surv(surv_time, dead) ~ treatment + genotype , data = surv_aten)
+aten.KM <- ggsurvplot(fit = aten.fit,
+                      xlab = "Days", 
+                      font.x = c(18, "plain", "black"),
+                      ylab = "Overall survival probability", 
+                      font.y = c(18, "plain", "black"),
+                      conf.int = FALSE, 
+                      xlim = c(0,100),
+                      font.tickslab = c(14, "plain", "black"),
+                      legend = c("bottom"), 
+                      legend.title = "",  
+                      color = "genotype",
+                      linetype = "treatment") 
+
+aten.KM
+
+b <- coxme(Surv(surv_time, dead) ~ treatment + (1|replicate), data = surv_aten)
+d <- coxph(Surv(surv_time, dead) ~ treatment, data = surv_aten)
+f <- coxme(Surv(surv_time, dead) ~ treatment + genotype +  (1|replicate), data = surv_aten)
+h <- coxph(Surv(surv_time, dead) ~ treatment + genotype, data = surv_aten)
+j <- coxme(Surv(surv_time, dead) ~ genotype + (1|replicate), data = surv_aten)
+l <- coxph(Surv(surv_time, dead) ~ genotype, data = surv_aten)
+
+AIC(b)
+AIC(d)
+AIC(f)
+AIC(h)
+AIC(j)
+AIC(l)
+
+
+# f, h are same, use h
+h <- coxph(Surv(surv_time, dead) ~ treatment + genotype, data = surv_aten)
+
+h_fit <- cox.zph(h)
+plot(h_fit)
+#OK 
+
+#use emmeans to compare actual cox model
+h.emm <- emmeans(h,list(pairwise ~ treatment), adjust = "tukey")   
+h.emm.s <- emmeans(h, "treatment")
+pairs(h.emm.s)
+pwpm(h.emm.s)
+
+h.emm <- emmeans(h,list(pairwise ~ genotype), adjust = "tukey")   
+h.emm.s <- emmeans(h, "genotype")
+pwpm(h.emm.s) 
+
+aten_suvr.means <- h |> 
+  emmeans(~treatment, type = 'response') |> 
+  as.data.frame() |> 
+  mutate(survival = 1-response)
+```
+
