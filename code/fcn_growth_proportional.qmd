@@ -1,0 +1,1166 @@
+---
+title: "fcn_growth_proportional"
+format: html
+editor: source
+---
+
+
+# Preparations
+
+#Load the necessary libraries
+```{r Preperations}
+#| label: libraries
+#| output: false
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: false
+
+library(tidyverse) #for data wrangling
+library(cmdstanr)   #for cmdstan
+library(brms)       #for fitting models in STAN
+library(standist)   #for visualizing distributions
+library(HDInterval) #for HPD intervals
+library(posterior)  #for posterior draws
+library(coda)       #for diagnostics
+library(bayesplot)  #for diagnostics
+library(ggmcmc)     #for MCMC diagnostics
+library(rstan)      #for interfacing with STAN
+library(effects)   #for partial effects plots
+library(car)       #for regression diagnostics
+library(broom)     #for tidy output
+library(ggfortify) #for model diagnostics
+library(sjPlot)    #for outputs
+library(knitr)     #for kable
+library(emmeans)   #for estimating marginal means
+library(MASS)      #for glm.nb
+library(MuMIn)     #for AICc
+library(tidybayes)
+library(broom.mixed)#for tidying MCMC outputs
+library(patchwork)  #for multiple plots
+library(ggeffects)
+library(DHARMa)
+library(ggridges)
+library(bayestestR) #for ROPE
+library(see)        #for some plots
+library(easystats)     #framework for stats, modelling and visualisation 
+library(dplyr)
+source('../helperFunctions.R') 
+```
+
+#Read in data
+```{r readData, results='markdown', eval=TRUE}
+#| label: read_data
+#| output: false
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+growth <- read_csv('../data/corals_bw_all_monthly.csv', trim_ws = TRUE)
+
+growth$tank_rep_rand <- paste(growth$treatment, "_", growth$replicate)
+
+growth <- growth |> mutate(species = factor(species), 
+                           treatment = factor(treatment), 
+                           replicate = factor(replicate),
+                       tank_rep_rand = factor(tank_rep_rand), 
+                       genotype = factor(genotype), 
+                       fragment = factor(fragment),  
+                       month = factor(month),
+                       bw_raw = as.numeric(bw_raw),
+                       abs_0 = as.numeric(abs_0),
+                       abs_monthly = as.numeric(abs_monthly),
+                       rel_0 = as.numeric(rel_0), 
+                       rel_monthly = as.numeric(rel_monthly))   
+
+growth_pver <- growth |> dplyr::filter(species=="pver") |> droplevels() 
+growth_aten <- growth |> dplyr::filter(species=="aten") |> droplevels() 
+growth_plut <- growth |> dplyr::filter(species=="plut") |> droplevels() 
+growth_pdae <- growth |> dplyr::filter(species=="pdae") |> droplevels()
+```
+
+#Load models 
+```{r}
+load("../models/pver.prop_monthly.brm8.RData")
+load("../models/aten.prop_monthly.brm6.RData")
+load("../models/plut.prop_monthly.brm6.RData")
+load("../models/pdae.prop_monthly.brm8.RData")
+```
+
+#Visualisation
+
+```{r}
+#| label: Visualisation_set-up
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+group.colors_pam <- c(control = "#999999", dissolved = "#E69F00", fish = "#56B4E9", livefeeds = "#009E73", mix = "#F0E442", pellets = "#0072B2")
+
+level_order_pam_new <- c('control', 'pellets', 'livefeeds', 'mix', 'fish', 'dissolved') 
+labels_pam_new <- c('Control','Pellets', 'LiveFeeds','LiveFeeds + Fish', 'Fish', 'Dissolved' )
+ 
+```
+
+#Pver 
+##Month 1-3 only, remove outliers
+```{r}
+#| label: data_monthly_pver
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+months <- c('1', '2', '3')
+growth_pver_m <- growth_pver |> dplyr::filter(month %in% months) |> droplevels() 
+
+growth_pver_m_out <- growth_pver_m |> dplyr::filter(abs_monthly >= -1.1, abs_monthly < 1.1)
+#remove values >< 1.1g change in weight month to month as this is likely to be mistakes in the data
+```
+
+##Proportional growth 
+```{r}
+#| label: data_monthly_pver_proportional
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+
+growth_pver_m_out_prop <- growth_pver_m_out |> mutate(prop_monthly = bw_raw/bw_initial_raw)
+
+```
+
+##Run model
+####Priors model
+
+```{r}
+#| label: rand_model_1_pver_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+pver.prop_monthly.form4 <- bf(prop_monthly ~ treatment*month + (treatment|replicate), 
+                              family = Gamma(link = "log"), 
+                              shape ~ treatment*month*genotype) 
+
+
+priors <- prior(normal(0.024, 0.1), class = 'Intercept') + 
+  prior(normal(0, 0.1), class = 'b') + 
+  prior(student_t(3, 0, 0.1), class = 'sd') + 
+  prior(student_t(3, 0, 0.1), class = 'b', dpar = 'shape')
+
+pver.prop_monthly.brm7 <- brm(pver.prop_monthly.form4, 
+                 data = growth_pver_m_out_prop,
+                 prior = priors, 
+                 sample_prior = 'only',
+                 iter = 10000, 
+                 warmup = 2500, 
+                 chains = 3, cores = 3, 
+                 thin = 10, 
+                 refresh = 0, 
+                 seed = 123,
+                 control = list(adapt_delta = 0.99),
+                 backend = "cmdstan")
+
+pver.prop_monthly.brm7 |> conditional_effects('month:treatment') |> plot(points = TRUE)  
+
+#OK
+```
+
+####With data
+
+```{r}
+#| label: rand_model_2_pver_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+pver.prop_monthly.brm8 <- pver.prop_monthly.brm7 |> update(sample_prior = "yes",
+                                       refresh = 0,
+                                       seed = 123) 
+
+pver.prop_monthly.brm8 |> conditional_effects('month:treatment') |> plot(points = TRUE, jitter_width = 0.1)  
+```
+
+####MCMC sampling diagnostics
+
+```{r}
+#| label: rand_model_3_pver_prop
+#| output: false
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+pars <- pver.prop_monthly.brm8 |> get_variables()
+pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^sigma$') |> na.omit()
+pars_3 <- str_extract(pars, '^sd_.*|^b_shape_.*|^sigma$') |> na.omit()
+
+#Traceplots
+pver.prop_monthly.brm8$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+#good 
+
+#Autocorrelation
+pver.prop_monthly.brm8$fit |> stan_ac(pars = pars_2) 
+pver.prop_monthly.brm8$fit |> stan_ac(pars = pars_3) 
+#good
+
+#Rhat
+pver.prop_monthly.brm8$fit |> stan_rhat()
+#good
+
+#ESS
+pver.prop_monthly.brm8$fit |> stan_ess() 
+#good 
+
+summary(pver.prop_monthly.brm8) 
+#looks OK
+```
+
+####Posterior probablity checks
+
+```{r}
+#| label: rand_model_4_pver_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+pver.prop_monthly.brm8 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+```
+
+####DHARMA residuals
+
+```{r}
+#| label: rand_model_5_pver_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+coral.resids <- make_brms_dharma_res(pver.prop_monthly.brm8, integerResponse = FALSE)
+
+wrap_elements(~testUniformity(coral.resids)) + 
+  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
+  wrap_elements(~testDispersion(coral.resids))
+
+```
+
+####Summary 
+#####Overall comparisons
+
+```{r}
+#| label: rand_pver_month_invest_1_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+pver.prop_monthly.brm8 |> 
+  as_draws_df() |> 
+  dplyr::select(matches('^b_.*|^sigma$|^sd.*')) |> 
+  mutate(across(everything(), exp)) |> 
+  summarise_draws(median, 
+                  ~ HDInterval::hdi(.x, .width = 0.95),  
+                  Pl = ~ mean(.x < 1), 
+                  Pg = ~ mean(.x > 1),
+                  "rhat", 
+                  "ess_bulk", 
+                  "ess_tail") |>
+  knitr::kable()  
+
+#remember, this is log link so we are looking at proportional changes!
+```
+
+#####Means plot - 3mo
+
+```{r}
+#| label: rand_pver_month_invest_2_prop_3mo
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+pver.prop_month.means3 <- pver.prop_monthly.brm8 |> 
+  emmeans(~treatment*month, type = 'response') |> 
+  as.data.frame() |> 
+  dplyr::filter(month=="3") |> 
+  droplevels()
+
+#make plot that displays mean and HDCI
+pver_prop_month_plot3_noraw <- ggplot(data = pver.prop_month.means3, aes(x=factor(treatment, level = level_order_pam_new), y = response, colour = treatment)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
+  theme_classic() +
+  theme(legend.position = "none", 
+        text = element_text(size=15, colour = "black"),
+        axis.text.y = element_text(colour = "black"), 
+axis.text.x = element_text(angle = 45, 
+                                  vjust =1, 
+                                   hjust = 1,
+                                   colour = "black")) +
+    scale_x_discrete(expression(""), 
+                   breaks = waiver(), 
+                   labels = stringr::str_wrap(labels_pam_new, 9)) + 
+  scale_y_continuous(expression(Proportional~growth)) + 
+  scale_colour_manual(values=group.colors_pam)
+pver_prop_month_plot3_noraw
+```
+
+#####Pairwise comparisons
+
+```{r}
+#| label: rand_pver_month_invest_3_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+sTreat <- pver.prop_monthly.brm8$data |> pull(treatment) |> levels()
+STreat <- rep(1, length(sTreat))
+names(STreat) <- sTreat
+pver.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(.draw == 1, month == 1) |> pull(.value) -> x
+x %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))
+
+
+pver.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  #filter(.draw == 1, month == 1) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  filter(month == 3) |> 
+  summarise(?median_hdci(fit),
+            Pl = mean(fit<0),
+            Pg = mean(fit>0)) 
+#absolute difference between the treatments within different months
+
+pver.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = log(exp(.value))) |> 
+  #filter(.draw == 1, month == 1) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = exp(t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey")))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  filter(month == 3) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<1),
+            Pg = mean(fit>1)) |> 
+  as.data.frame() -> pver_prop_pwratios
+#this is the ratio growth in one treatment to another, with HDPI
+
+```
+
+#Aten 
+##Month 1-3 only, remove outliers
+
+```{r}
+#| label: data_monthly_aten
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+months <- c('1', '2', '3')
+growth_aten_m <- growth_aten |> dplyr::filter(month %in% months) |> droplevels() 
+
+growth_aten_m_out <- growth_aten_m |> dplyr::filter(abs_0 >= -1, abs_0 < 1)
+#remove values >< 1.1g change in weight from 0 to now as this is likely to be mistakes in the data 
+
+```
+
+##Proportional growth
+```{r}
+#| label: data_monthly_aten_proportional
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+
+growth_aten_m_out_prop <- growth_aten_m_out |> mutate(prop_monthly = bw_raw/bw_initial_raw)
+
+```
+
+##Run model
+####Priors model
+
+```{r}
+#| label: rand_model_1_aten_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+aten.prop_monthly.form3 <- bf(prop_monthly ~ treatment*month + (treatment|replicate:genotype), 
+                              family = Gamma(link = "log"), 
+                              shape ~ treatment*month)
+
+priors <- prior(normal(0.020, 0.1), class = 'Intercept') + 
+  prior(normal(0, 0.1), class = 'b') + 
+  prior(student_t(3, 0, 0.1), class = 'sd') +
+  prior(student_t(3, 0, 0.1), class = 'b', dpar = 'shape')
+
+aten.prop_monthly.brm5 <- brm(aten.prop_monthly.form3, 
+                 data = growth_aten_m_out_prop,
+                 prior = priors, 
+                 sample_prior = 'only',
+                 iter = 10000, 
+                 warmup = 2500, 
+                 chains = 3, cores = 3, 
+                 thin = 10, 
+                 refresh = 0, 
+                 seed = 123,
+                 control = list(adapt_delta = 0.99),
+                 backend = "cmdstan") 
+
+aten.prop_monthly.brm5 |> conditional_effects('month:treatment') |> plot(points = TRUE)  
+#OK
+```
+
+####With data
+
+```{r}
+#| label: rand_model_2_aten_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+aten.prop_monthly.brm6 <- aten.prop_monthly.brm5 |> update(sample_prior = "yes",
+                                       refresh = 0,
+                                       seed = 123) 
+
+aten.prop_monthly.brm6 |> conditional_effects('month:treatment') |> plot(points = TRUE, jitter_width = 0.1)  
+#seems good 
+```
+
+####MCMC sampling diagnostics
+
+```{r}
+#| label: rand_model_3_aten_prop
+#| output: false
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+pars <- aten.prop_monthly.brm6 |> get_variables()
+pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^sigma$') |> na.omit()
+pars_3 <- str_extract(pars, '^sd_.*|^b_shape_.*|^sigma$') |> na.omit()
+
+#Traceplots
+aten.prop_monthly.brm6$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+#good 
+
+#Autocorrelation
+aten.prop_monthly.brm6$fit |> stan_ac(pars = pars_2) 
+aten.prop_monthly.brm6$fit |> stan_ac(pars = pars_3) 
+#good
+
+#Rhat
+aten.prop_monthly.brm6$fit |> stan_rhat()
+#good
+
+#ESS
+aten.prop_monthly.brm6$fit |> stan_ess() 
+#good 
+
+summary(aten.prop_monthly.brm6) 
+#looks OK
+```
+
+####Posterior probablity checks
+
+```{r}
+#| label: rand_model_4_aten_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+aten.prop_monthly.brm6 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+
+```
+
+####DHARMA residuals
+
+```{r}
+#| label: rand_model_5_aten_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+coral.resids <- make_brms_dharma_res(aten.prop_monthly.brm6, integerResponse = FALSE)
+
+wrap_elements(~testUniformity(coral.resids)) + 
+  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
+  wrap_elements(~testDispersion(coral.resids))
+```
+
+####Summary 
+#####Overall comparisons
+
+```{r}
+#| label: rand_aten_month_invest_1_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+aten.prop_monthly.brm6 |> 
+  as_draws_df() |> 
+  dplyr::select(matches('^b_.*|^sigma$|^sd.*')) |> 
+  mutate(across(everything(), exp)) |> 
+  summarise_draws(median, 
+                  ~ HDInterval::hdi(.x, .width = 0.95),  
+                  Pl = ~ mean(.x < 1), 
+                  Pg = ~ mean(.x > 1),
+                  "rhat", 
+                  "ess_bulk", 
+                  "ess_tail") |>
+  knitr::kable() 
+#remember, this is log link so we are looking at proportional changes!
+```
+
+#####Means plot - 3mo
+
+```{r}
+#| label: rand_aten_month_invest_2_prop_3mo
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+aten.prop_month.means3 <- aten.prop_monthly.brm6 |> 
+  emmeans(~treatment*month, type = 'response') |> 
+  as.data.frame() |> 
+  dplyr::filter(month=="3") |> 
+  droplevels()
+
+(aten.prop_month.means3) 
+
+#make plot that displays mean and HDCI
+aten_prop_month_plot3_noraw <- ggplot(data = aten.prop_month.means3, aes(x=factor(treatment, level = level_order_pam_new), y = response, colour = treatment)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
+  theme_classic() +
+  theme(legend.position = "none", 
+        text = element_text(size=15, colour = "black"),
+        axis.text.y = element_text(colour = "black"), 
+axis.text.x = element_text(angle = 45, 
+                                  vjust =1, 
+                                   hjust = 1,
+                                   colour = "black")) +
+    scale_x_discrete(expression(""), 
+                   breaks = waiver(), 
+                   labels = stringr::str_wrap(labels_pam_new, 9)) + 
+  scale_y_continuous(expression(Proportional~growth),
+                     limits = c(1, 1.05)) + 
+  scale_colour_manual(values=group.colors_pam)
+aten_prop_month_plot3_noraw
+```
+
+#####Pairwise comparisons
+
+```{r}
+#| label: rand_aten_month_invest_3_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+sTreat <- aten.prop_monthly.brm6$data |> pull(treatment) |> levels()
+STreat <- rep(1, length(sTreat))
+names(STreat) <- sTreat
+aten.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(.draw == 1, month == 1) |> pull(.value) -> x
+x %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))
+
+aten.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter( month == 3) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<0),
+            Pg = mean(fit>0)) 
+#absolute difference between the treatments within different months
+
+aten.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = log(exp(.value))) |> 
+  #filter(.draw == 1, month == 1) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = exp(t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey")))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<1),
+            Pg = mean(fit>1))  
+#this is the ratio growth in one treatment to another, with HDPI
+
+```
+
+#Plut 
+##Month 1-3 only, remove outliers
+```{r}
+#| label: data_monthly_plut
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+months <- c('1', '2', '3')
+growth_plut_m <- growth_plut |> dplyr::filter(month %in% months) |> droplevels() 
+
+growth_plut_m_out <- growth_plut_m |> dplyr::filter(abs_0 >= -1, abs_0 < 2)
+#remove values not between -1 and 2g change in weight from 0 to now as this is likely to be mistakes in the data
+```
+
+##Proportional growth column
+
+```{r}
+#| label: data_monthly_plut_proportional
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+
+growth_plut_m_out_prop <- growth_plut_m_out |> mutate(prop_monthly = bw_raw/bw_initial_raw)
+```
+
+##Run model
+####Priors model
+
+```{r}
+#| label: rand_model_1_plut_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+plut.prop_monthly.form3 <- bf(prop_monthly ~ treatment*month + (treatment|replicate:genotype), 
+                              family = Gamma(link = "log"), 
+                              shape ~ treatment*month) 
+
+
+priors <- prior(normal(0.045, 0.1), class = 'Intercept') + 
+  prior(normal(0, 0.1), class = 'b') + 
+  prior(student_t(3, 0, 0.1), class = 'sd') +
+  prior(student_t(3, 0, 0.1), class = 'b', dpar = 'shape')
+
+plut.prop_monthly.brm5 <- brm(plut.prop_monthly.form3, 
+                 data = growth_plut_m_out_prop,
+                 prior = priors, 
+                 sample_prior = 'only',
+                 iter = 10000, 
+                 warmup = 2500, 
+                 chains = 3, cores = 3, 
+                 thin = 10, 
+                 refresh = 0, 
+                 seed = 123,
+                 control = list(adapt_delta = 0.99),
+                 backend = "cmdstan")
+
+plut.prop_monthly.brm5 |> conditional_effects('month:treatment') |> plot(points = TRUE)  
+#OK
+```
+
+####With data
+
+```{r}
+#| label: rand_model_2_plut_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+plut.prop_monthly.brm6 <- plut.prop_monthly.brm5 |> update(sample_prior = "yes",
+                                       refresh = 0,
+                                       seed = 123)
+
+plut.prop_monthly.brm6 |> conditional_effects('month:treatment') |> plot(points = TRUE, jitter_width = 0.1)  
+plut.prop_monthly.brm6 |> hypothesis("treatmentlivefeeds = 0") |> plot()
+ 
+```
+
+####MCMC sampling diagnostics
+
+```{r}
+#| label: rand_model_3_plut_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+pars <- plut.prop_monthly.brm6 |> get_variables()
+pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^sigma$') |> na.omit()
+pars_3 <- str_extract(pars, '^sd_.*|^b_shape_.*|^sigma$') |> na.omit()
+
+#Traceplots
+plut.prop_monthly.brm6$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+#good 
+
+#Autocorrelation
+plut.prop_monthly.brm6$fit |> stan_ac(pars = pars_2) 
+plut.prop_monthly.brm6$fit |> stan_ac(pars = pars_3) 
+#good
+
+#Rhat
+plut.prop_monthly.brm6$fit |> stan_rhat()
+#good
+
+#ESS
+plut.prop_monthly.brm6$fit |> stan_ess() 
+#good 
+
+summary(plut.prop_monthly.brm6) 
+#looks OK
+```
+
+####Posterior probablity checks
+
+```{r}
+#| label: rand_model_4_plut_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+plut.prop_monthly.brm6 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+
+```
+
+####DHARMA residuals
+
+```{r}
+#| label: rand_model_5_plut_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+coral.resids <- make_brms_dharma_res(plut.prop_monthly.brm6, integerResponse = FALSE)
+
+wrap_elements(~testUniformity(coral.resids)) + 
+  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
+  wrap_elements(~testDispersion(coral.resids))
+
+```
+
+####Summary 
+#####Overall comparisons
+
+```{r}
+#| label: rand_plut_month_invest_1_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+plut.prop_monthly.brm6 |> 
+  as_draws_df() |> 
+  dplyr::select(matches('^b_.*|^sigma$|^sd.*')) |> 
+  mutate(across(everything(), exp)) |> 
+  summarise_draws(median, 
+                  ~ HDInterval::hdi(.x, .width = 0.95),  
+                  Pl = ~ mean(.x < 1), 
+                  Pg = ~ mean(.x > 1),
+                  "rhat", 
+                  "ess_bulk", 
+                  "ess_tail") |>
+  knitr::kable()  
+
+#remember, this is log link so we are looking at proportional changes!
+```
+
+#####Means plot - 3mo
+
+```{r}
+#| label: rand_plut_month_invest_2_prop_3mo
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true 
+plut.prop_month.means3 <- plut.prop_monthly.brm6 |> 
+  emmeans(~treatment*month, type = 'response') |> 
+  as.data.frame() |> 
+  dplyr::filter(month=="3") |> 
+  droplevels()
+
+#make plot that displays mean and HDCI
+plut_prop_month_plot3_noraw <- ggplot(data = plut.prop_month.means3, aes(x=factor(treatment, level = level_order_pam_new), y = response, colour = treatment)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
+  theme_classic() +
+  theme(legend.position = "none", 
+        text = element_text(size=15, colour = "black"),
+        axis.text.y = element_text(colour = "black"), 
+axis.text.x = element_text(angle = 45, 
+                                  vjust =1, 
+                                   hjust = 1,
+                                   colour = "black")) +
+    scale_x_discrete(expression(""), 
+                   breaks = waiver(), 
+                   labels = stringr::str_wrap(labels_pam_new, 9)) + 
+  scale_y_continuous(expression(Proportional~growth),
+                     limits = c(1.05, 1.13),
+                     breaks = c(1.06, 1.08, 1.10, 1.12)) + 
+  scale_colour_manual(values=group.colors_pam)
+plut_prop_month_plot3_noraw
+
+```
+
+#####Pairwise comparisons
+
+```{r}
+#| label: rand_plut_month_invest_3_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+sTreat <- plut.prop_monthly.brm6$data |> pull(treatment) |> levels()
+STreat <- rep(1, length(sTreat))
+names(STreat) <- sTreat
+plut.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(.draw == 1, month == 1) |> pull(.value) -> x
+x %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))
+
+
+plut.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(month == 3) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<0),
+            Pg = mean(fit>0)) 
+#absolute difference between the treatments within different months
+
+plut.prop_monthly.brm6 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = log(exp(.value))) |> 
+  #filter(.draw == 1, month == 1) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = exp(t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey")))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<1),
+            Pg = mean(fit>1))  
+#this is the ratio growth in one treatment to another, with HDPI
+
+```
+
+#Pdae 
+##Month 1-3 only, remove outliers
+
+```{r}
+#| label: data_monthly_pdae
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+months <- c('1', '2', '3')
+growth_pdae_m <- growth_pdae |> dplyr::filter(month %in% months) |> droplevels() 
+
+growth_pdae_m_out <- growth_pdae_m |> dplyr::filter(abs_0 >= -1, abs_0 < 1.6)
+#remove values not between -1 and 1.6g change in weight from 0 to now as this is likely to be mistakes in the data
+
+```
+
+##Proportional growth
+
+```{r}
+#| label: data_monthly_pdae_proportional
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+
+growth_pdae_m_out_prop <- growth_pdae_m_out |> mutate(prop_monthly = bw_raw/bw_initial_raw)
+
+```
+
+##Run model 
+####Priors model
+
+```{r}
+#| label: rand_model_1_pdae_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+pdae.prop_monthly.form4 <- bf(prop_monthly ~ treatment*month + (treatment|replicate), 
+                              family = Gamma(link = "log"), 
+                              shape ~ treatment*month*genotype) 
+
+priors <- prior(normal(0.012, 0.1), class = 'Intercept') + 
+  prior(normal(0, 0.1), class = 'b') + 
+  prior(student_t(3, 0, 0.1), class = 'sd') +
+  prior(student_t(3, 0, 0.1), class = 'b', dpar = 'shape')
+
+pdae.prop_monthly.brm7 <- brm(pdae.prop_monthly.form4, 
+                 data = growth_pdae_m_out_prop,
+                 prior = priors, 
+                 sample_prior = 'only',
+                 iter = 10000, 
+                 warmup = 2500, 
+                 chains = 3, cores = 3, 
+                 thin = 10, 
+                 refresh = 0, 
+                 seed = 123,
+                 control = list(adapt_delta = 0.99),
+                 backend = "cmdstan")
+
+pdae.prop_monthly.brm7 |> conditional_effects('month:treatment') |> plot(points = TRUE)  
+#OK
+```
+
+####With data
+
+```{r}
+#| label: rand_model_2_pdae_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+pdae.prop_monthly.brm8 <- pdae.prop_monthly.brm7 |> update(sample_prior = "yes",
+                                       refresh = 0,
+                                       seed = 123)
+pdae.prop_monthly.brm8 |> conditional_effects('month:treatment') |> plot(points = TRUE, jitter_width = 0.1)  
+
+pdae.prop_monthly.brm8 |> hypothesis("treatmentlivefeeds = 0") |> plot()
+
+```
+
+####MCMC sampling diagnostics
+
+```{r}
+#| label: rand_model_3_pdae_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true 
+pars <- pdae.prop_monthly.brm8 |> get_variables()
+pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^sigma$') |> na.omit()
+pars_3 <- str_extract(pars, '^sd_.*|^b_shape_.*|^sigma$') |> na.omit()
+
+#Traceplots
+pdae.prop_monthly.brm8$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+#good 
+
+#Autocorrelation
+pdae.prop_monthly.brm8$fit |> stan_ac(pars = pars_2) 
+pdae.prop_monthly.brm8$fit |> stan_ac(pars = pars_3) 
+#good
+
+#Rhat
+pdae.prop_monthly.brm8$fit |> stan_rhat()
+#good
+
+#ESS
+pdae.prop_monthly.brm8$fit |> stan_ess() 
+#good 
+
+summary(pdae.prop_monthly.brm8) 
+#looks OK
+```
+
+####Posterior probablity checks
+
+```{r}
+#| label: rand_model_4_pdae_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+pdae.prop_monthly.brm8 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+
+```
+
+####DHARMA residuals
+
+```{r}
+#| label: rand_model_5_pdae_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+coral.resids <- make_brms_dharma_res(pdae.prop_monthly.brm8, integerResponse = FALSE)
+
+wrap_elements(~testUniformity(coral.resids)) + 
+  wrap_elements(~plotResiduals(coral.resids, quantreg = FALSE)) +
+  wrap_elements(~testDispersion(coral.resids))
+```
+
+####Summary 
+#####Overall comparisons
+
+```{r}
+#| label: rand_plut_month_invest_1_prop
+#| output: true
+#| eval: true
+#| warning: false
+#| message: false
+#| cache: true
+
+plut.prop_monthly.brm6 |> 
+  as_draws_df() |> 
+  dplyr::select(matches('^b_.*|^sigma$|^sd.*')) |> 
+  mutate(across(everything(), exp)) |> 
+  summarise_draws(median, 
+                  ~ HDInterval::hdi(.x, .width = 0.95),  
+                  Pl = ~ mean(.x < 1), 
+                  Pg = ~ mean(.x > 1),
+                  "rhat", 
+                  "ess_bulk", 
+                  "ess_tail") |>
+  knitr::kable()  
+#remember, this is log link so we are looking at proportional changes!
+```
+
+#####Means plot - 3mo
+
+```{r}
+#| label: rand_pdae_month_invest_2_prop_3mo
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+pdae.prop_month.means3 <- pdae.prop_monthly.brm8 |> 
+  emmeans(~treatment*month, type = 'response') |> 
+  as.data.frame() |> 
+  dplyr::filter(month=="3") |> 
+  droplevels()
+
+#make plot that displays mean and HDCI
+pdae_prop_month_plot3_noraw <- ggplot(data = pdae.prop_month.means3, aes(x=factor(treatment, level = level_order_pam_new), y = response, colour = treatment)) + 
+  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
+  theme_classic() +
+  theme(legend.position = "none", 
+        text = element_text(size=15, colour = "black"),
+        axis.text.y = element_text(colour = "black"), 
+axis.text.x = element_text(angle = 45, 
+                                  vjust =1, 
+                                   hjust = 1,
+                                   colour = "black")) +
+    scale_x_discrete(expression(""), 
+                   breaks = waiver(), 
+                   labels = stringr::str_wrap(labels_pam_new, 9)) + 
+  scale_y_continuous(expression(Proportional~growth)) + 
+  scale_colour_manual(values=group.colors_pam)
+pdae_prop_month_plot3_noraw
+```
+
+#####Pairwise comparisons
+
+```{r}
+#| label: rand_plut_month_invest_3_prop
+#| output: true
+#| eval: true 
+#| warning: false
+#| message: false
+#| cache: true
+
+sTreat <- pdae.prop_monthly.brm8$data |> pull(treatment) |> levels()
+STreat <- rep(1, length(sTreat))
+names(STreat) <- sTreat
+pdae.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(.draw == 1, month == 1) |> pull(.value) -> x
+x %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))
+
+
+pdae.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = exp(.value)) |> 
+  filter(month == 3) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<0),
+            Pg = mean(fit>0)) 
+#absolute difference between the treatments within different months
+
+pdae.prop_monthly.brm8 |> emmeans(~treatment|month) |> 
+  gather_emmeans_draws() |>  
+  mutate(.value = log(exp(.value))) |> 
+  #filter(.draw == 1, month == 1) |> 
+  ungroup() |>
+  group_by(month, .draw) |> 
+  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
+                           fit = exp(t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey")))))) |> 
+  unnest(fit) |> 
+  group_by(contrast, month) |> 
+  summarise(median_hdci(fit),
+            Pl = mean(fit<1),
+            Pg = mean(fit>1))  
+#this is the ratio growth in one treatment to another, with HDPI
+
+```
