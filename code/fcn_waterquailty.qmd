@@ -78,7 +78,8 @@ part_WQ <- part_WQ |> mutate(tank_rep_rand = factor(tank_rep_rand),
 part_WQ <- part_WQ |> dplyr::filter(treatment!="Blank") |> droplevels() 
   #drop the Blank from part_WQ
 
-dislv_WQ <- dislv_WQ |> mutate(NP = (NH4 + NO3NO2)/PO4)
+dislv_WQ <- dislv_WQ |> mutate(NP = (NH4 + NO3NO2)/PO4, 
+                               NO3 = NO3NO2 - NO2)
 #Make N/P Ratio
 
 ```
@@ -88,12 +89,11 @@ dislv_WQ <- dislv_WQ |> mutate(NP = (NH4 + NO3NO2)/PO4)
 #model outputs that were used in the manuscript
 load("../models/WQ.NH4.brm4.RData")
 load("../models/WQ.NO2.brm4.RData")
-load("../models/WQ.NO3NO2.brm4.RData")
+load("../models/WQ.NO3.brm4.RData")
 load("../models/WQ.PO4.brm4.RData")
 load("../models/WQ.DOC.brm4.RData")
 load("../models/WQ.PN.brm4.RData")
 load("../models/WQ.PC.brm6.RData")
-load("../models/WQ.PCN.brm4.RData")
 load("../models/WQ.NP.brm2.RData")
 
 ```
@@ -648,29 +648,33 @@ WQ.NO2.brm4 |> emmeans(~treatment) |>
 #this is the ratio of one treatment to another 
 ```
 
-#NO2 + NO3 
-## Fit the model
 
+#NO3 
+## Fit the model
 ###Treatment + 1|tank:sample random model 
 ####Priors model
 ```{r}
-#| label: tank_samp_rand_model_1_NO2NO3
+#| label: tank_samp_rand_model_1_NO3
 #| output: true
 #| eval: true
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.form2 <- bf(NO3NO2 ~ treatment + (1|tank_rep_rand:sample), family = Gamma(link = "log"))
+WQ.NO3.form <- bf(NO3 ~ treatment + (1|tank_rep_rand:sample), family = Gamma(link = "log"))
                     
-priors_NO3NO2 <- prior(normal(-0.28, 0.5), class = 'Intercept') + 
+get_prior(WQ.NO3.form, data = dislv_WQ) 
+
+dislv_WQ |> group_by(treatment) |> summarise(median(log(NO3)), mad(log(NO3))) 
+
+priors_NO3 <- prior(normal(-0.332, 0.6), class = 'Intercept') + 
   prior(student_t(3, 0, 0.9), class = 'b') + 
   prior(student_t(3, 0, 0.4), class = 'sd') + 
   prior(gamma(2, 1), class = 'shape')
 
-WQ.NO3NO2.brm3 <- brm(WQ.NO3NO2.form2, 
+WQ.NO3.brm3 <- brm(WQ.NO3.form, 
                  data = dislv_WQ,
-                 prior = priors_NO3NO2, 
+                 prior = priors_NO3, 
                  sample_prior = 'only',
                  iter = 5000, 
                  warmup = 2500, 
@@ -682,104 +686,105 @@ WQ.NO3NO2.brm3 <- brm(WQ.NO3NO2.form2,
                  backend = "cmdstan") 
 
 
-WQ.NO3NO2.brm3 |> conditional_effects("treatment") |> plot(points = TRUE)   
+WQ.NO3.brm3 |> conditional_effects("treatment") |> plot(points = TRUE)   
 #OK
 ```
 
 ####With data
 ```{r}
-#| label: tank_samp_rand_model_2_NO2NO3
+#| label: tank_samp_rand_model_2_NO3
 #| output: true
 #| eval: true
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.brm4 <- WQ.NO3NO2.brm3 |> update(sample_prior = "yes",
+WQ.NO3.brm4 <- WQ.NO3.brm3 |> update(sample_prior = "yes",
                                        refresh = 0, 
-                                       iter = 5000,
+                                       iter = 10000,
                                        warmup = 2500,
                                        seed = 123) 
 
-WQ.NO3NO2.brm4 |> conditional_effects("treatment") |> plot(points = TRUE, jitter_width = 0.2)
+WQ.NO3.brm4 |> conditional_effects("treatment") |> plot(points = TRUE, jitter_width = 0.2)
 ```
 
 ####MCMC sampling diagnostics
 
 ```{r}
-#| label: tank_samp_rand_model_3_NO2NO3
+#| label: tank_samp_rand_model_3_NO3
 #| output: false
 #| eval: true
 #| warning: false
 #| message: false
 #| cache: true 
-pars <- WQ.NO3NO2.brm4 |> get_variables()
+pars <- WQ.NO3.brm4 |> get_variables()
 pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^shape$') |> na.omit() 
 
 #Traceplots
-WQ.NO3NO2.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
+WQ.NO3.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
 #good 
 
 #Autocorrelation
-WQ.NO3NO2.brm4$fit |> stan_ac(pars = pars_2) 
+WQ.NO3.brm4$fit |> stan_ac(pars = pars_2) 
 #good
 
 #Rhat
-WQ.NO3NO2.brm4$fit |> stan_rhat()
+WQ.NO3.brm4$fit |> stan_rhat()
 #good
 
 #ESS
-WQ.NO3NO2.brm4$fit |> stan_ess() 
+WQ.NO3.brm4$fit |> stan_ess() 
 #OK
 
-summary(WQ.NO3NO2.brm4) 
+summary(WQ.NO3.brm4) 
 #good 
-
 ```
 
 ####Posterior probablity checks
 
 ```{r}
-#| label: tank_samp_rand_model_4_NO2NO3
+#| label: tank_samp_rand_model_4_NO3
 #| output: true
 #| eval: true 
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.brm4 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
-#pretty good
+WQ.NO3.brm4 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
+#pretty good - bimodal means will not be perfect
 ```
 
 ####DHARMA residuals
 
 ```{r}
-#| label: tank_samp_rand_model_5_NO2NO3
+#| label: tank_samp_rand_model_5_NO3
 #| output: true
 #| eval: true 
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.resids <- make_brms_dharma_res(WQ.NO3NO2.brm4, integerResponse = FALSE)
+WQ.resids <- make_brms_dharma_res(WQ.NO3.brm4, integerResponse = FALSE)
 
 wrap_elements(~testUniformity(WQ.resids)) + 
   wrap_elements(~plotResiduals(WQ.resids, form = factor(rep(1, nrow(dislv_WQ))))) +
   wrap_elements(~plotResiduals(WQ.resids, quantreg = FALSE)) +
   wrap_elements(~testDispersion(WQ.resids))
+#KS triggered but visually is OK - is the bimodal bit in the middle causing a bit of a miss, not much we can do about that 
+#residuals vs predicted looks OK, dispersion OK
 ```
 
 ####Model Investigations 
 #####Summary
 ```{r}
-#| label: model_investigations_1_NO2NO3
+#| label: model_investigations_1_NO3
 #| output: true
 #| eval: true
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.brm4 |> 
+WQ.NO3.brm4 |> 
   as_draws_df() |> 
   dplyr::select(matches('^b_.*|shape.*')) |> 
   mutate(across(everything(), exp)) |> 
@@ -796,20 +801,22 @@ WQ.NO3NO2.brm4 |>
 
 #####Means plot
 ```{r}
-#| label: model_investigations_2_NO2NO3
+#| label: model_investigations_2_NO3
 #| output: true
 #| eval: true 
 #| warning: false
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.means <- WQ.NO3NO2.brm4 |> 
+WQ.NO3.means <- WQ.NO3.brm4 |> 
   emmeans(~treatment, type = 'response') |> 
   as.data.frame()
 
+(WQ.NO3.means)
+
 #make plot that displays mean and HDCI
-WQ_NO3NO2_plot <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, level = level_order_wq), y = response, colour = treatment)) + 
-  geom_point(data = dislv_WQ, aes(x = treatment, y = NO3NO2), colour = "black", alpha = 0.2, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
+WQ_NO3_plot <- ggplot(data = WQ.NO3.means, aes(x=factor(treatment, level = level_order_wq), y = response, colour = treatment)) + 
+  geom_point(data = dislv_WQ, aes(x = treatment, y = NO3), colour = "black", alpha = 0.2, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
   geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
   theme_classic() +
   theme(legend.position = "none", 
@@ -819,15 +826,17 @@ WQ_NO3NO2_plot <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, level =
   scale_x_discrete(expression(Treatment), 
                    breaks = waiver(), 
                    labels = stringr::str_wrap(wq_labels, 12)) + 
-  scale_y_continuous(expression(NO[3]+NO[2]~(µmol~L^-1))) + 
+  scale_y_continuous(expression(NO[3]~(µmol~L^-1))) + 
   scale_colour_manual(values=group.colors_wq) + 
   ggplot2::annotate(geom = "text", 
-                    label = expression(NO[3]+NO[2]), 
+                    label = expression(NO[3]), 
                     size = 5, 
                     x = 0.5, 
                     y = Inf, 
                     hjust = 0, 
                     vjust = 1)
+
+WQ_NO3_plot 
 ```
 
 #####Means plot-no raw data
@@ -840,12 +849,14 @@ WQ_NO3NO2_plot <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, level =
 #| message: false
 #| cache: true
 
-WQ.NO3NO2.means <- WQ.NO3NO2.brm4 |> 
+WQ.NO3.means <- WQ.NO3.brm4 |> 
   emmeans(~treatment, type = 'response') |> 
   as.data.frame()
 
+(WQ.NO3.means)
+
 #make plot that displays mean and HDCI
-WQ_NO3NO2_plot_new <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, level = level_order_wq_new), y = response, colour = treatment)) + 
+WQ_NO3_plot_new <- ggplot(data = WQ.NO3.means, aes(x=factor(treatment, level = level_order_wq_new), y = response, colour = treatment)) + 
   geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
   theme_classic() +
   theme(legend.position = "none", 
@@ -856,9 +867,12 @@ WQ_NO3NO2_plot_new <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, lev
   scale_x_discrete(expression(Treatment), 
                    breaks = waiver(), 
                    labels = stringr::str_wrap(wq_labels_new, 12)) + 
-  scale_y_continuous(expression(NO[3]+NO[2]~(µmol~L^-1)), 
-                                limits = c(0.8, 1.8)) + 
+  scale_y_continuous(expression(NO[3]~(µmol~L^-1)), 
+                                limits = c(0.5, 1.75)) + 
   scale_colour_manual(values=group.colors_wq)
+
+WQ_NO3_plot_new  
+
 ```
 
 #####Pairwise investigations (Murray code)
@@ -871,11 +885,11 @@ WQ_NO3NO2_plot_new <- ggplot(data = WQ.NO3NO2.means, aes(x=factor(treatment, lev
 #| message: false
 #| cache: true
 
-sTreat <- WQ.NO3NO2.brm4$data |> pull(treatment) |> levels()
+sTreat <- WQ.NO3.brm4$data |> pull(treatment) |> levels()
 STreat <- rep(1, length(sTreat))
 names(STreat) <- sTreat
 
-WQ.NO3NO2.brm4 |> emmeans(~treatment) |> 
+WQ.NO3.brm4 |> emmeans(~treatment) |> 
   gather_emmeans_draws() |>  
   mutate(.value = exp(.value)) |> 
   #filter(.draw == 1, month == 1) |> 
@@ -891,7 +905,7 @@ WQ.NO3NO2.brm4 |> emmeans(~treatment) |>
 #absolute difference between the treatments
 
 
-WQ.NO3NO2.brm4 |> emmeans(~treatment) |> 
+WQ.NO3.brm4 |> emmeans(~treatment) |> 
   gather_emmeans_draws() |>  
   mutate(.value = log(exp(.value))) |> 
   #filter(.draw == 1, month == 1) |> 
@@ -1958,259 +1972,6 @@ WQ.PC.brm6 |> emmeans(~treatment) |>
             Pg = mean(fit>1))  
 #this is the ratio of one treatment to another 
 ```
-
-#PC/PN 
-## Fit the model
-
-###Treatment + 1|tank:sample random model 
-####Priors model
-```{r}
-#| label: tank_samp_rand_model_1_PCN
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.form2 <- bf(PCN ~ treatment + (1|tank_rep_rand:sample), family = Gamma(link = "log")) 
-
-priors <- prior(normal(1.68, 0.4), class = 'Intercept') + 
-  prior(normal(0, 0.5), class = 'b') + 
-  prior(student_t(3, 0, 0.2), class = 'sd') + 
-  prior(gamma(0.01, 0.01), class = 'shape')
-
-WQ.PCN.brm3 <- brm(WQ.PCN.form2, 
-                 data = part_WQ_PCPN,
-                 prior = priors, 
-                 sample_prior = 'only',
-                 iter = 10000, 
-                 warmup = 2500, 
-                 chains = 3, cores = 3, 
-                 thin = 10, 
-                 refresh = 0, 
-                 seed = 123, 
-                 control = list(adapt_delta = 0.99, max_treedepth = 20),
-                 backend = "cmdstan") 
-
-
-WQ.PCN.brm3 |> conditional_effects("treatment") |> plot(points = TRUE)   
-#OK 
-```
-
-####With data
-
-```{r}
-#| label: tank_samp_rand_model_2_PCN
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.brm4 <- WQ.PCN.brm3 |> update(sample_prior = "yes",
-                                       refresh = 0, 
-                                       iter = 10000,
-                                       warmup = 2500,
-                                       seed = 123) 
-
-WQ.PCN.brm4 |> conditional_effects("treatment") |> plot(points = TRUE)
-#OK
-
-WQ.PCN.brm4 |> get_variables()
-WQ.PCN.brm4 |> hypothesis("treatmentLiveFeeds = 0") |> plot()
-#seems OK
-```
-
-####Posterior probablity checks
-
-```{r}
-#| label: tank_samp_rand_model_4_PCN
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.brm4 |> pp_check(type = 'dens_overlay', ndraws = 200) + theme_classic()
-#pretty good - use 0.01 is better than 2, 1 for shape 
-#still not perfect fit
-```
-
-####MCMC sampling diagnostics
-
-```{r}
-#| label: tank_samp_rand_model_3_PCN
-#| output: false
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true 
-pars <- WQ.PCN.brm4 |> get_variables()
-pars_2 <- str_extract(pars, '^b_.*|^sd_.*|^shape$') |> na.omit() 
-
-#Traceplots
-WQ.PCN.brm4$fit |> stan_trace(pars = pars_2, inc_warmup = TRUE)
-#good 
-
-#Autocorrelation
-WQ.PCN.brm4$fit |> stan_ac(pars = pars_2) 
-#good
-
-#Rhat
-WQ.PCN.brm4$fit |> stan_rhat()
-#good
-
-#ESS
-WQ.PCN.brm4$fit |> stan_ess() 
-#OK
-
-summary(WQ.PCN.brm4) 
-#good 
-
-```
-
-####DHARMA residuals
-
-```{r}
-#| label: tank_samp_rand_model_5_PCN
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.resids <- make_brms_dharma_res(WQ.PCN.brm4, integerResponse = FALSE)
-
-wrap_elements(~testUniformity(WQ.resids)) + 
-  #wrap_elements(~plotResiduals(WQ.resids, form = factor(rep(1, nrow(dislv_WQ))))) +
-  wrap_elements(~plotResiduals(WQ.resids, quantreg = FALSE)) +
-  wrap_elements(~testDispersion(WQ.resids))
-#OK, not perfect
-
-```
-
-####Model Investigations #####Summary
-
-```{r}
-#| label: model_investigations_1_PCN
-#| output: true
-#| eval: true
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.brm4 |> 
-  as_draws_df() |> 
-  mutate(across(everything(), exp)) |> 
-  dplyr::select(matches('^b_.*|shape.*')) |> 
-  summarise_draws(median, 
-                  ~ HDInterval::hdi(.x, .width = 0.95),  
-                  Pl = ~ mean(.x < 1), 
-                  Pg = ~ mean(.x > 1),
-                  "rhat", 
-                  "ess_bulk", 
-                  "ess_tail") |>
-  knitr::kable()  
-
-```
-
-#####Means plot
-
-```{r}
-#| label: model_investigations_2_PCN
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.means <- WQ.PCN.brm4 |> 
-  emmeans(~treatment, type = 'response') |> 
-  as.data.frame()
-
-(WQ.PCN.means)
-
-#make plot that displays mean and HDCI
-WQ_PCN_plot <- ggplot(data = WQ.PCN.means, aes(x=factor(treatment, level = level_order_wq), y = response, colour = treatment)) + 
-  geom_point(data = part_WQ_PCPN, aes(x = factor(treatment, level = level_order_wq), y = PCN), colour = "black", alpha = 0.4, size = 0.5, position = position_jitter(w = 0.1, h = 0)) +
-  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
-  theme_classic() +
-  theme(legend.position = "none", 
-        text = element_text(size=15)) +
-  scale_x_discrete(expression(Treatment), 
-                   breaks = waiver(), 
-                   labels = c('Control', 'Dissolved_Coral', 'Dissolved_Fish', 'Fish', 'LiveFeeds', 'Mix', 'Pellets')) + 
-  scale_y_continuous(expression(PC/PN~ratio)) + 
-  scale_colour_manual(values=group.colors_wq)
-
-WQ_PCN_plot 
-```
-
-#####Means plot-no raw data
-
-```{r}
-#| label: model_investigations_2_PCN_new
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-WQ.PCN.means <- WQ.PCN.brm4 |> 
-  emmeans(~treatment, type = 'response') |> 
-  as.data.frame()
-
-WQ.PCN.means
-
-WQ_PCN_plot_new <- ggplot(data = WQ.PCN.means, aes(x=factor(treatment, level = level_order_wq_new), y = response, colour = treatment)) + 
-  geom_pointrange(aes(ymin = lower.HPD, ymax = upper.HPD), fatten = 5) + 
-  theme_classic() +
-  theme(legend.position = "none", 
-        text = element_text(size=15, colour = "black"), 
-        axis.text.y = element_text(colour = "black"), 
-        axis.text.x = element_text(colour = "black")) +
-  scale_x_discrete(expression(Treatment), 
-                   breaks = waiver(), 
-                   labels = stringr::str_wrap(wq_labels_new, 12)) + 
-  scale_y_continuous(expression(C:N), 
-                                limits = c(4, 5.5)) + 
-  scale_colour_manual(values=group.colors_wq)
-
-WQ_PCN_plot_new  
-
-```
-
-#####Pairwise investigations (Murray code)
-
-```{r}
-#| label: model_investigations_4_PCN
-#| output: true
-#| eval: true 
-#| warning: false
-#| message: false
-#| cache: true
-
-sTreat <- WQ.PCN.brm4$data |> pull(treatment) |> levels()
-STreat <- rep(1, length(sTreat))
-names(STreat) <- sTreat
-
-WQ.PCN.brm4 |> emmeans(~treatment) |> 
-  gather_emmeans_draws() |>  
-  mutate(.value = exp(.value)) |> 
-  #filter(.draw == 1, month == 1) |> 
-  ungroup() |>
-  group_by(.draw) |> 
-  reframe(fit = data.frame(contrast = rownames(multcomp::contrMat(n = STreat, type = "Tukey")), 
-                           fit = t(as.vector(.value) %*% t(multcomp::contrMat(n = STreat, type = "Tukey"))))) |> 
-  unnest(fit) |> 
-  group_by(contrast) |> 
-  summarise(median_hdci(fit),
-            Pl = mean(fit<0),
-            Pg = mean(fit>0)) 
-#absolute difference between the treatments
-
-```
-
 
 #NP ratio 
 ## Fit the model
